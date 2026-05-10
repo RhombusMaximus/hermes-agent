@@ -21,7 +21,12 @@ services:
       - daimon-net
 
     volumes:
-      - hermes-repo:/opt/hermes-agent:ro
+      - /home/daimon/github/hermes-agent:/opt/hermes-agent:ro
+      - /home/daimon/projects/triage/db:/opt/triage/db:ro
+      - /home/daimon/projects/triage/scripts:/opt/triage/scripts:ro
+      - /home/daimon/projects/triage/hermes-agent.git:/opt/triage/hermes-agent.git:ro
+    environment:
+      TRIAGE_HOME: /opt/triage
 
   daimon-github-broker:
     build:
@@ -57,8 +62,6 @@ services:
     volumes:
       - ${GH_TOKEN_PATH:?GH_TOKEN_PATH must be set to an absolute host path for the root-owned 0600 GitHub token}:/run/secrets/gh_token:ro
 
-volumes:
-  hermes-repo:
 
 networks:
   daimon-net:
