@@ -13771,6 +13771,7 @@ class GatewayRunner:
                         model=model,
                         max_iterations=max_iterations,
                         disabled_toolsets=disabled_toolsets,
+                        source=source,
                     )
                     model = _applied["model"]
                     max_iterations = _applied["max_iterations"]
