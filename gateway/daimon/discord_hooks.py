@@ -11,6 +11,7 @@ from typing import Optional, Any
 
 from gateway.daimon.session_manager import DaimonSessionManager, SessionStartResult
 from gateway.daimon.admin_commands import handle_daimon_command, CommandResult
+from gateway.daimon.window_buffer import WindowBuffer, BufferedMessage, format_window_context
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class DaimonDiscordHooks:
         self._manager: DaimonSessionManager | None = None
         self._banned: set[str] = set()
         self._queued: dict[str, Any] = {}  # thread_id → thread object (for promotion notification)
+        self._window_buffer = WindowBuffer()
 
         try:
             self._manager = DaimonSessionManager(raw_config)
@@ -32,6 +34,12 @@ class DaimonDiscordHooks:
                 self._manager = None
                 logger.debug("[Daimon] Inactive — no admin_users configured")
             else:
+                # Configure buffer size from config
+                self._window_buffer = WindowBuffer(
+                    max_per_thread=self._manager.config.max_buffer_per_thread
+                    if hasattr(self._manager.config, 'max_buffer_per_thread')
+                    else 50
+                )
                 logger.info("[Daimon] Active with %d admin(s)", len(self._manager.config.admin_users))
         except Exception as e:
             logger.warning("[Daimon] Init failed: %s", e)
@@ -49,6 +57,30 @@ class DaimonDiscordHooks:
     def is_banned(self, user_id: str) -> bool:
         """Check if a user is banned."""
         return user_id in self._banned
+
+    def buffer_message(self, thread_id: str, author_name: str, author_id: str, content: str, has_attachments: bool = False) -> None:
+        """Buffer a non-mention message for later context flush."""
+        from datetime import datetime, timezone
+        msg = BufferedMessage(
+            author_name=author_name,
+            author_id=author_id,
+            content=content,
+            timestamp=datetime.now(timezone.utc),
+            has_attachments=has_attachments,
+        )
+        self._window_buffer.append(thread_id, msg)
+
+    def flush_window(self, thread_id: str) -> str:
+        """Flush the window buffer and return formatted context string.
+
+        Returns empty string if no messages buffered.
+        """
+        buffered = self._window_buffer.flush(thread_id)
+        return format_window_context(buffered)
+
+    def clear_buffer(self, thread_id: str) -> None:
+        """Clear buffer for a thread (cleanup on close)."""
+        self._window_buffer.clear(thread_id)
 
     def should_process_in_thread(self, author_id: str, thread_id: str, role_ids: Optional[list[str]] = None) -> tuple[bool, str]:
         """Check if a message should be processed (thread ownership + turn cap).
