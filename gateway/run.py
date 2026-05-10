@@ -13204,7 +13204,11 @@ class GatewayRunner:
         try:
             from gateway.daimon.gateway_hooks import get_agent_overrides, apply_overrides, setup_tool_gate, teardown_tool_gate, redact_output
             if source.user_id:
-                _daimon_overrides = get_agent_overrides(user_config, source.user_id, platform_key)
+                _daimon_overrides = get_agent_overrides(user_config, source.user_id, platform_key, role_ids=source.role_ids)
+                # Silent ignore: tier=None means user should not trigger the bot
+                if _daimon_overrides and _daimon_overrides.tier is None:
+                    logger.debug("Daimon: silently ignoring user %s (no matching role)", source.user_id)
+                    return
         except ImportError:
             pass
         except Exception as _daimon_err:
@@ -13773,7 +13777,7 @@ class GatewayRunner:
                     disabled_toolsets = _applied["disabled_toolsets"]
                     if _applied.get("ephemeral_system_prompt"):
                         combined_ephemeral = _applied["ephemeral_system_prompt"]
-                    if not _daimon_overrides.tier.is_admin:
+                    if _daimon_overrides.tier and not _daimon_overrides.tier.is_admin:
                         setup_tool_gate(session_id, user_config)
                 except Exception as _e:
                     logger.debug("Daimon apply_overrides failed: %s", _e)
@@ -14297,7 +14301,7 @@ class GatewayRunner:
                 unregister_gateway_notify(_approval_session_key)
                 reset_current_session_key(_approval_session_token)
                 # ── Daimon tool gate cleanup ──
-                if _daimon_overrides and not _daimon_overrides.tier.is_admin:
+                if _daimon_overrides and _daimon_overrides.tier and not _daimon_overrides.tier.is_admin:
                     try:
                         teardown_tool_gate(session_id)
                     except Exception:
@@ -14312,7 +14316,7 @@ class GatewayRunner:
             final_response = result.get("final_response")
 
             # ── Daimon output redaction (user sessions only) ──
-            if final_response and _daimon_overrides and not _daimon_overrides.tier.is_admin:
+            if final_response and _daimon_overrides and _daimon_overrides.tier and not _daimon_overrides.tier.is_admin:
                 try:
                     final_response = redact_output(final_response)
                 except Exception:
