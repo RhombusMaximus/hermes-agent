@@ -4162,10 +4162,23 @@ class DiscordAdapter(BasePlatformAdapter):
 
             # Skip the mention check if the message is in a thread where
             # the bot has previously participated (auto-created or replied in).
+            # EXCEPTION: When Daimon is active, always require @mention (punctuation-based windowing).
             in_bot_thread = is_thread and thread_id in self._threads
+            _daimon_active = self._daimon and self._daimon.active
 
-            if require_mention and not is_free_channel and not in_bot_thread:
+            if require_mention and not is_free_channel and not (in_bot_thread and not _daimon_active):
                 if self._client.user not in message.mentions and not mention_prefix:
+                    # When Daimon is active in a tracked thread, buffer the message silently
+                    if _daimon_active and in_bot_thread and is_thread and thread_id:
+                        _content = message.content or ""
+                        if _content.strip():
+                            self._daimon.buffer_message(
+                                thread_id,
+                                author_name=message.author.display_name,
+                                author_id=str(message.author.id),
+                                content=_content,
+                                has_attachments=bool(message.attachments),
+                            )
                     return
         # Auto-thread: when enabled, automatically create a thread for every
         # @mention in a text channel so each conversation is isolated (like Slack).
@@ -4371,9 +4384,34 @@ class DiscordAdapter(BasePlatformAdapter):
             if _thread_title and _thread_title.strip():
                 _context_parts.append(f"[Forum post: {_thread_title}]")
 
-            # If this is the first time the bot is responding in this thread,
-            # fetch prior messages so the agent has full context of the conversation
-            if thread_id and thread_id not in self._threads:
+            # Punctuation-based windowing: flush buffered messages as context.
+            # If Daimon is active, use the window buffer. Otherwise fall back to
+            # the API-based history fetch for first-time interactions.
+            _daimon_active = self._daimon and self._daimon.active
+            if _daimon_active and thread_id:
+                _window_context = self._daimon.flush_window(thread_id)
+                if _window_context:
+                    _context_parts.append(_window_context.rstrip())
+                elif thread_id not in self._threads:
+                    # First mention after gateway restart — buffer was empty,
+                    # fall back to Discord API to fetch recent messages
+                    try:
+                        _prior_msgs = []
+                        async for msg in message.channel.history(limit=50, before=message):
+                            if msg.author != self._client.user:
+                                _author = msg.author.display_name
+                                _content = msg.content.strip()
+                                if _content:
+                                    _prior_msgs.append(f"{_author}: {_content}")
+                        if _prior_msgs:
+                            _prior_msgs.reverse()
+                            _context_parts.append("[Messages since last response]")
+                            _context_parts.extend(_prior_msgs)
+                            _context_parts.append("[Current request:]")
+                    except Exception as _e:
+                        logger.debug("[Discord] Failed to fetch thread history: %s", _e)
+            elif thread_id and thread_id not in self._threads:
+                # Non-Daimon: original behavior — fetch 20 prior messages on first mention
                 try:
                     _prior_msgs = []
                     async for msg in message.channel.history(limit=20, before=message):
